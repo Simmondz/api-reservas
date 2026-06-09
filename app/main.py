@@ -5,7 +5,7 @@ from app.database import create_indexes
 app = FastAPI(
     title="Sistema de Gestión de Citas",
     description="API REST para gestión de reservas de servicios",
-    version="1.0.0",
+    version="1.0.1",
 )
 
 app.include_router(usuarios.router)

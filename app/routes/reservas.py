@@ -1,10 +1,25 @@
 from fastapi import APIRouter, HTTPException, Query
 from app.database import db
-from app.schemas import ReservaCreate
 from bson import ObjectId
+from bson.errors import InvalidId
+from app.schemas import ReservaCreate
 from datetime import datetime
 
 router = APIRouter(prefix="/reservas", tags=["Reservas"])
+
+
+def parse_oid(id_str: str) -> ObjectId:
+    try:
+        return ObjectId(id_str)
+    except (InvalidId, TypeError):
+        raise HTTPException(status_code=400, detail=f"ID inválido: {id_str}")
+
+
+def parse_fecha(fecha_str: str) -> datetime:
+    try:
+        return datetime.strptime(fecha_str, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Formato de fecha inválido: {fecha_str}. Use YYYY-MM-DD")
 
 
 def serialize(doc):
@@ -23,9 +38,12 @@ def verificar_disponibilidad(
     hora_inicio: str = Query(..., description="HH:MM"),
     hora_fin: str = Query(..., description="HH:MM"),
 ):
+    oid = parse_oid(espacio_id)
+    fecha_dt = parse_fecha(fecha)
+
     conflicto = db.reservas.find_one({
-        "espacio_id": ObjectId(espacio_id),
-        "fecha": datetime.strptime(fecha, "%Y-%m-%d"),
+        "espacio_id": oid,
+        "fecha": fecha_dt,
         "estado": "activa",
         "hora_inicio": {"$lt": hora_fin},
         "hora_fin": {"$gt": hora_inicio},
@@ -35,21 +53,23 @@ def verificar_disponibilidad(
 
 @router.post("/", status_code=201)
 def crear_reserva(reserva: ReservaCreate):
+    usuario_oid = parse_oid(reserva.usuario_id)
+    espacio_oid = parse_oid(reserva.espacio_id)
+    fecha = parse_fecha(reserva.fecha)
+
     # Validar usuario existe
-    usuario = db.usuarios.find_one({"_id": ObjectId(reserva.usuario_id)})
+    usuario = db.usuarios.find_one({"_id": usuario_oid})
     if not usuario:
         raise HTTPException(status_code=422, detail="Usuario no encontrado")
 
     # Validar espacio existe
-    espacio = db.espacios.find_one({"_id": ObjectId(reserva.espacio_id)})
+    espacio = db.espacios.find_one({"_id": espacio_oid})
     if not espacio:
         raise HTTPException(status_code=422, detail="Espacio no encontrado")
 
-    fecha = datetime.strptime(reserva.fecha, "%Y-%m-%d")
-
     # Validar disponibilidad
     conflicto = db.reservas.find_one({
-        "espacio_id": ObjectId(reserva.espacio_id),
+        "espacio_id": espacio_oid,
         "fecha": fecha,
         "estado": "activa",
         "hora_inicio": {"$lt": reserva.hora_fin},
@@ -59,8 +79,8 @@ def crear_reserva(reserva: ReservaCreate):
         raise HTTPException(status_code=409, detail="Horario no disponible")
 
     doc = {
-        "usuario_id": ObjectId(reserva.usuario_id),
-        "espacio_id": ObjectId(reserva.espacio_id),
+        "usuario_id": usuario_oid,
+        "espacio_id": espacio_oid,
         "usuario_info": {"nombre": usuario["nombre"], "email": usuario["email"]},
         "espacio_info": {"nombre": espacio["nombre"], "tipo": espacio["tipo"]},
         "fecha": fecha,
@@ -83,9 +103,9 @@ def listar_reservas(
 ):
     filtro = {}
     if usuario_id:
-        filtro["usuario_id"] = ObjectId(usuario_id)
+        filtro["usuario_id"] = parse_oid(usuario_id)
     if fecha:
-        filtro["fecha"] = datetime.strptime(fecha, "%Y-%m-%d")
+        filtro["fecha"] = parse_fecha(fecha)
 
     reservas = list(db.reservas.find(filtro).sort("fecha", 1))
     return [serialize(r) for r in reservas]
@@ -93,8 +113,9 @@ def listar_reservas(
 
 @router.patch("/{reserva_id}/cancelar")
 def cancelar_reserva(reserva_id: str):
+    oid = parse_oid(reserva_id)
     result = db.reservas.update_one(
-        {"_id": ObjectId(reserva_id), "estado": "activa"},
+        {"_id": oid, "estado": "activa"},
         {"$set": {"estado": "cancelada"}},
     )
     if result.matched_count == 0:
